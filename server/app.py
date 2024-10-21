@@ -1,43 +1,115 @@
-#!/usr/bin/env python3
 
-from flask import request, session
-from flask_restful import Resource
+import flask
+import pytest
 
-from config import app, db, api
-from models import User
+from app import app
+from models import db, User
 
-class ClearSession(Resource):
+app.secret_key = b'a\xdb\xd2\x13\x93\xc1\xe9\x97\xef2\xe3\x004U\xd1Z'
 
-    def delete(self):
-    
-        session['page_views'] = None
-        session['user_id'] = None
+class TestApp:
+    '''Flask API in app.py'''
 
-        return {}, 204
+    def test_creates_users_at_signup(self):
+        '''creates user records with usernames and passwords at /signup.'''
+        
+        with app.app_context():
+            
+            User.query.delete()
+            db.session.commit()
+        
+        with app.test_client() as client:
+            
+            response = client.post('/signup', json={
+                'username': 'ash',
+                'password': 'pikachu',
+            })
 
-class Signup(Resource):
-    
-    def post(self):
-        json = request.get_json()
-        user = User(
-            username=json['username']
-        )
-        user.password_hash = json['password']
-        db.session.add(user)
-        db.session.commit()
-        return user.to_dict(), 201
+            assert(response.json['username'] == 'ash')
+            assert(User.query.filter(User.username == 'ash').first())
 
-class CheckSession(Resource):
-    pass
+    def test_logs_in(self):
+        '''logs users in with a username and password at /login.'''
+        with app.app_context():
+            
+            User.query.delete()
+            db.session.commit()
+        
+        with app.test_client() as client:
 
-class Login(Resource):
-    pass
+            client.post('/signup', json={
+                'username': 'ash',
+                'password': 'pikachu',
+            })
 
-class Logout(Resource):
-    pass
+            response = client.post('/login', json={
+                'username': 'ash',
+                'password': 'pikachu',
+            })
 
-api.add_resource(ClearSession, '/clear', endpoint='clear')
-api.add_resource(Signup, '/signup', endpoint='signup')
+            assert(response.get_json()['username'] == 'ash')
 
-if __name__ == '__main__':
-    app.run(port=5555, debug=True)
+            with client.session_transaction() as session:
+                assert(session.get('user_id') == \
+                    User.query.filter(User.username == 'ash').first().id)
+
+    def test_logs_out(self):
+        '''logs users out at /logout.'''
+        with app.app_context():
+            
+            User.query.delete()
+            db.session.commit()
+        
+        with app.test_client() as client:
+
+            client.post('/signup', json={
+                'username': 'ash',
+                'password': 'pikachu',
+            })
+
+            client.post('/login', json={
+                'username': 'ash',
+                'password': 'pikachu',
+            })
+
+            # check if logged in
+            with client.session_transaction() as session:
+                assert(session['user_id'])
+
+            # check if logged out
+            response = client.delete('/logout')
+            with client.session_transaction() as session:
+                assert(not session.get('user_id'))
+            
+
+
+    def test_checks_for_session(self):
+        '''checks if a user is authenticated and returns the user as JSON at /check_session.'''
+
+        with app.app_context():
+            
+            User.query.delete()
+            db.session.commit()
+        
+        with app.test_client() as client:
+
+            client.post('/signup', json={
+                'username': 'ash',
+                'password': 'pikachu',
+            })
+
+            client.post('/login', json={
+                'username': 'ash',
+                'password': 'pikachu',
+            })
+
+            response = client.get('/check_session')
+            
+            assert(response.get_json()['username'] == 'ash')
+
+            client.delete('/logout')
+            
+            response = client.get('/check_session')
+            
+            assert(response.status_code == 204)
+            assert(not response.data)
